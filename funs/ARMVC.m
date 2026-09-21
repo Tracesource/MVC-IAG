@@ -1,0 +1,104 @@
+function [UU,A,Z,iter,obj] = ARMVC(X,numanchor,beta,gamma)
+% m      : the number of anchor. the size of Z is m*n.
+% X      : n*di
+
+%% initialize           
+maxIter = 50 ; % the number of iterations
+IterMax = 50;
+
+m = numanchor;
+numview = length(X);
+numsample = size(X{1},1);
+
+XX = [];
+for p = 1 : numview
+    X{p} = mapstd(X{p}',0,1);
+    XX = [XX;X{p}];
+end
+% [XU,~,~]=svds(XX',m);
+rand('twister',12);
+[IDX,AC] = kmeans(XX',m, 'MaxIter',100,'Replicates',10);
+for i = 1:numsample
+    Z(IDX(i),i) = 1;
+end
+
+count = 1;
+for i = 1:numview
+   di = size(X{i},1); 
+   A{i} = AC(:,count:count+di-1)';
+   AA{i} = A{i}'*A{i};
+   count = count+di;
+   S{i} =zeros(m,m);
+end
+alpha = ones(numview)./numview;
+
+flag = 1;
+iter = 0;
+%%
+while flag
+    iter = iter + 1;
+
+    %% optimize Si
+    for iv=1:numview
+        theta{iv} = eye(m)-beta/(2*gamma).*(diag(diag(AA{iv}))*ones(m,m)+ones(m,m)*diag(diag(AA{iv}))-2*AA{iv});
+        for ii=1:m
+            S{iv}(:,ii) = EProjSimplex_new(theta{iv}(:,ii));
+        end
+        Ls{iv}=(diag(sum((S{iv}+S{iv}')/2))-(S{iv}+S{iv}')/2);
+    end
+    
+    
+    %% optimize Ai
+    for iv = 1:numview
+        C = alpha(iv)^2*Z*Z'+beta*Ls{iv};
+        D = alpha(iv)^2*X{iv} * Z';
+        s = cond(C);
+        if cond(C)>1e12
+            A{iv} = D*pinv(C);
+        else
+            A{iv} = D*inv(C);
+        end
+        AA{i} = A{i}'*A{i};
+    end
+
+    
+    %% optimize alpha
+    M = zeros(numview,1);
+    for iv = 1:numview
+        M(iv) = norm( X{iv} - A{iv}*Z,'fro')^2;
+    end
+    Mfra = M.^-1;
+    Q = 1/sum(Mfra);
+    alpha = Q*Mfra;
+
+
+    %% optimize Z
+    H = 0;
+    G = 0;
+    for iv=1:numview
+        H = H+alpha(iv)^2*AA{i};
+        G = G+alpha(iv)^2*(X{iv}'*A{iv});
+    end
+    for i = 1:numsample
+        [Z(:,i),~] = EProjSimplex_new_ZJP_V2(H./2,-G(i,:));
+    end
+
+    term1 = 0;
+    term2 = 0;
+    term3 = 0;
+    for iv = 1:numview
+        term1 = term1 + norm(X{iv}-A{iv}*Z,'fro')^2;
+        term2 = term2 + A{iv}*Ls{iv}*A{iv}';
+        term3 = term3 + norm(S{iv}-eye(m),'fro')^2;
+    end
+    
+    obj(iter) = term1+beta*term2+gamma*term3;
+    
+	if (iter>1) && (abs((obj(iter-1)-obj(iter))/(obj(iter-1)))<1e-4 || iter>maxIter || obj(iter) < 1e-10)
+        flag = 0;
+        [UU,~,V]=mySVD(Zall',numclass);
+    end
+end
+         
+         
+    
